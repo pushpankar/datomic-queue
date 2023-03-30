@@ -48,7 +48,7 @@
   (dpeek [this])
   (dpeek-last [this]))
 
-;; Add
+
 (defn- peek-last-helper [db queue-id]
   (let [query '[:find (pull ?item-id [*])
                 :in $ ?queue-id
@@ -57,34 +57,16 @@
                 [?queue ::queue.tail ?item-id]]]
     (ffirst (d/q query db queue-id))))
 
-(defn dpeek-node [q]
-  (ffirst (d/q '[:find ?item
-                 :in $ ?queue-id
-                 :where
-                 [?queue ::queue-id ?queue-id]
-                 [?queue ::queue.head ?queue-head]
-                 [?queue-head ::queue.item ?item]]
-            (d/db (:conn q))
-            (:id q)))) ;; Deal in maps
-
-(defn head-node [q]
-  (ffirst (d/q '[:find ?queue-head
-                 :in $ ?queue-id
-                 :where
-                 [?queue ::queue-id ?queue-id]
-                 [?queue ::queue.head ?queue-head]]
-            (d/db (:conn q))
-            (:id q))))
 
 (def queue-empty? nil?)
 
 
-(defn- one-node? [db head]
-  (let [terminal (ffirst (d/q '[:find ?empty-node-id
-                                :where
-                                [?empty-node-id :db/ident ::queue.dummy-item]]
-                           db))]
-    (= terminal (second head))))
+(defn- one-node? [head]
+  (= (-> head
+       :next-data
+       :db/ident)
+    ::queue.dummy-item))
+
 
 (defrecord DbQueue [conn id]
   IDatomicQueue
@@ -104,26 +86,30 @@
                                     [:db/add "new-item" ::queue.item ["data-id" [:db/ident ::queue.dummy-item]]]
                                     [:db/add last-item-id ::queue.item [last-data-id "new-item"]]
                                     [:db/add [::queue-id id] ::queue.tail "new-item"]]}))))
-  (dpeek [_]
-    (d/q '[:find ?data
-           :in $ ?queue-id
-           :where
-           [?queue ::queue-id ?queue-id]
-           [?queue ::queue.head ?queue-head]
-           [?queue-head ::queue.item ?item ]
-           [(untuple ?item) (?data-ref ?next-ref)]
-           [?data-ref ::data.data ?data]]
-      (d/db conn)
-      id))
+  (dpeek [_] (let [db (d/db conn)
+                   [head [data next-data]] (first  (d/q '[:find ?queue-head ?item
+                                             :in $ ?queue-id
+                                             :where
+                                             [?queue ::queue-id ?queue-id]
+                                             [?queue ::queue.head ?queue-head]
+                                             [?queue-head ::queue.item ?item ]
+                                             [(untuple ?item) (?data-ref ?next-ref)]
+                                             [?data-ref ::data.data ?data]]
+                                        db
+                                        id))]
+               (when head
+                 {:db/id head
+                  :data (d/pull db '[*] data)
+                  :next-data (d/pull db '[*] next-data)})))
 
   (dpop [this]
-    (let [head (dpeek-node this)]
-      (tap> head)
+    (let [head (dpeek this)]
       (cond
         (queue-empty? head) nil
-        (one-node? (d/db conn) head) (d/transact conn {:tx-data [[:db/retractEntity (head-node this)]]}) ;; this is wrong
-        :else (d/transact conn {:tx-data [[:db/retractEntity (head-node this)]
-                                          [:db/add [::queue-id id] ::queue.head (second head) ]]})))))
+        (one-node? head) (d/transact conn {:tx-data [[:db/retractEntity (:db/id head)]]})
+        :else (d/transact conn {:tx-data [[:db/retractEntity (:db/id head)]
+                                          [:db/add [::queue-id id] ::queue.head (:db/id (:next-data head))]]})))))
+
 
 
 
@@ -139,42 +125,48 @@
   [x]
   (println x "Hello, World!"))
 
+(def test-q (create-dbqueue conn))
+(dpeek test-q)
+(dpush test-q "4")
+(dpop test-q)
+;; => 87960930222214
+(d/pull (d/db (:conn test-q)) '[*] 101155069755465)
 
+
+;; => {:db/id 87960930222211, :data {:db/id 87960930222210, :datomic-queue.core/data.data "1"}, :next-data #:db{:id 101155069755465, :ident :datomic-queue.core/queue.dummy-item}}
 (comment
 
 
   (def p (p/open))
   (add-tap #'p/submit)
+  (tap> 2)
 
 
 
-  (def test-q (create-dbqueue conn))
+  
   (tap> test-q)
-  (dpeek test-q)
-  (head-node test-q)
+
+
+
+
   (dpop test-q)
-  (dpeek-node test-q)
   (peek-last-helper (d/db (:conn test-q)) (:id test-q))
   ;; Problem probably is properly cleaning the queue
 
-  (tap> (dpush test-q "4"))
+  (tap> (dpush test-q "2"))
   (tap> (d/db conn))
   (dpop test-q)
+  ;; pop is wrong. I am able to delete even after there should be nothing
 
   (d/transact (:conn test-q) {:tx-data [[:db/retractEntity (first (dpeek-node test-q))]]})
 
   (dpeek test-q)
   (dpush test-q "1")
 
-  (dpush test-q-2 "1")
 
   (ffirst [])
   (empty? nil)
 
-
-  (one-node? (d/db conn) (dpeek-node test-q))
-  (dpeek-node test-q-2)
-  ;; => [87960930222176 96757023244361]
 
   (d/transact (:conn test-q-2) {:tx-data [[:db/retractEntity 87960930222176]]})
 

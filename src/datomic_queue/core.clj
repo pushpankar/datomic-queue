@@ -65,6 +65,15 @@
                  [?queue ::queue.head ?queue-head]
                  [?queue-head ::queue.item ?item]]
             (d/db (:conn q))
+            (:id q)))) ;; Deal in maps
+
+(defn head-node [q]
+  (ffirst (d/q '[:find ?queue-head
+                 :in $ ?queue-id
+                 :where
+                 [?queue ::queue-id ?queue-id]
+                 [?queue ::queue.head ?queue-head]]
+            (d/db (:conn q))
             (:id q))))
 
 (def queue-empty? nil?)
@@ -72,9 +81,9 @@
 
 (defn- one-node? [db head]
   (let [terminal (ffirst (d/q '[:find ?empty-node-id
-               :where
-               [?empty-node-id :db/ident ::queue.dummy-item]]
-          db))]
+                                :where
+                                [?empty-node-id :db/ident ::queue.dummy-item]]
+                           db))]
     (= terminal (second head))))
 
 (defrecord DbQueue [conn id]
@@ -112,8 +121,8 @@
       (tap> head)
       (cond
         (queue-empty? head) nil
-        (one-node? (d/db conn) head) (d/transact conn {:tx-data [[:db/retractEntity (first head)]]})
-        :else (d/transact conn {:tx-data [[:db/retractEntity (first head)]
+        (one-node? (d/db conn) head) (d/transact conn {:tx-data [[:db/retractEntity (head-node this)]]}) ;; this is wrong
+        :else (d/transact conn {:tx-data [[:db/retractEntity (head-node this)]
                                           [:db/add [::queue-id id] ::queue.head (second head) ]]})))))
 
 
@@ -140,8 +149,15 @@
 
 
   (def test-q (create-dbqueue conn))
+  (tap> test-q)
   (dpeek test-q)
-  (dpush test-q "4")
+  (head-node test-q)
+  (dpop test-q)
+  (dpeek-node test-q)
+  (peek-last-helper (d/db (:conn test-q)) (:id test-q))
+  ;; Problem probably is properly cleaning the queue
+
+  (tap> (dpush test-q "4"))
   (tap> (d/db conn))
   (dpop test-q)
 

@@ -2,13 +2,6 @@
   (:require [datomic.client.api :as d]
             [portal.api :as p]))
 
-(def client (d/client {:server-type :dev-local
-                       :storage-dir :mem
-                       :system "ci"}))
-
-(d/create-database client {:db-name "dm-queue"})
-(def conn (d/connect client {:db-name "dm-queue"}))
-
 (def queue-schema [{:db/ident       ::queue-id
                     :db/valueType   :db.type/uuid
                     :db/unique      :db.unique/identity
@@ -40,7 +33,8 @@
                     :db/cardinality :db.cardinality/one}])
 
 
-(d/transact conn {:tx-data queue-schema})
+(defn init-db [conn]
+  (d/transact conn {:tx-data queue-schema}))
 
 (defprotocol IDatomicQueue
   (dpush [this data])
@@ -63,8 +57,8 @@
                                     (:id queue)
                                     node-id))]
      {:db/id node-id
-      :data (d/pull (d/db conn) '[*] data)
-      :next (d/pull (d/db conn) '[*] next-data)}))
+      :data (d/pull db '[*] data)
+      :next (d/pull db '[*] next-data)}))
   ([queue node-id]
    (get-node (d/db (:conn queue)) queue node-id)))
 
@@ -131,6 +125,18 @@
     (d/transact conn {:tx-data [{::queue-id id}]})
     q))
 
+#_(defn peek
+  ([queue])
+  ([db queue]))
+
+#_(defn peek-last
+  ([queue])
+  ([db queue]))
+
+#_(defn pop [queue])
+#_(defn push [queue])
+
+;; API
 
 (defn foo
   "I don't do a whole lot."
@@ -143,11 +149,26 @@
   (tap> 2)
   (def test-q (create-dbqueue conn))
 
+  (def client (d/client {:server-type :dev-local
+                        :storage-dir :mem
+                        :system "ci"}))
+
+  (d/create-database client {:db-name "dm-queue"})
+  (def conn (d/connect client {:db-name "dm-queue"}))
+  (init-db conn)
+
+
+
 (dpeek-last test-q)
-(dpush test-q "4")
+(dpush test-q "5")
 (one-node? (dpeek test-q))
 (dpeek-last test-q)
 (dpop test-q)
+(dpeek test-q)
+
+(let [queue (create-dbqueue conn)
+          _ (dpush queue "1")]
+      (dpeek queue))
 
 
 

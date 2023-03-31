@@ -1,6 +1,8 @@
 (ns datomic-queue.core
-  (:require [datomic.client.api :as d]
-            [portal.api :as p]))
+  (:require
+   [datomic.client.api :as d]
+   [portal.api :as p]))
+
 
 (def queue-schema [{:db/ident       ::queue-id
                     :db/valueType   :db.type/uuid
@@ -36,17 +38,9 @@
 (defn init-db [conn]
   (d/transact conn {:tx-data queue-schema}))
 
-(defprotocol IDatomicQueue
-  (dpush [this data])
-  (dpop [this])
-  (dpeek [this])
-  (dpeek-last [this]))
-
-
 (def queue-empty? nil?)
 
-(defn get-node
-  ([db queue node-id]
+(defn- get-node [db queue-id node-id]
    (let [[data next-data] (ffirst (d/q '[:find ?item
                                          :in $ ?queue-id ?node-id
                                          :where
@@ -54,13 +48,11 @@
                                          [(untuple ?item) (?data-ref ?next-ref)]
                                          [?data-ref ::data.data ?data]]
                                     db
-                                    (:id queue)
+                                    queue-id
                                     node-id))]
      {:db/id node-id
       :data (d/pull db '[*] data)
       :next (d/pull db '[*] next-data)}))
-  ([queue node-id]
-   (get-node (d/db (:conn queue)) queue node-id)))
 
 
 (defn- one-node? [head]
@@ -69,74 +61,85 @@
        :db/ident)
     ::queue.dummy-item))
 
+(defn- dpeek [db queue-id]
+  (let [head (ffirst
+               (d/q '[:find ?queue-head
+                      :in $ ?queue-id
+                      :where
+                      [?queue ::queue-id ?queue-id]
+                      [?queue ::queue.head ?queue-head]]
+                 db
+                 queue-id))]
+    (when head
+      (get-node db queue-id head))))
 
-(defrecord DbQueue [conn id]
-  IDatomicQueue
-  (dpeek-last [this]
-    (let [db (d/db conn)
-          tail (ffirst  (d/q '[:find ?queue-tail
-                               :in $ ?queue-id
-                               :where
-                               [?queue ::queue-id ?queue-id]
-                               [?queue ::queue.tail ?queue-tail]]
-                          db
-                          id))]
+(defn- dpeek-last [db queue-id]
+  (let [tail (ffirst  (d/q '[:find ?queue-tail
+                             :in $ ?queue-id
+                             :where
+                             [?queue ::queue-id ?queue-id]
+                             [?queue ::queue.tail ?queue-tail]]
+                        db
+                        queue-id))]
       (when tail
-        (get-node db this tail))))
-  (dpush [this data]
-    (if (empty? (dpeek-last this))
-      (d/transact conn {:tx-data [[:db/add "data-id" ::data.data data]
-                                  [:db/add "new-item" ::queue.item ["data-id" [:db/ident ::queue.dummy-item]]]
-                                  [:db/add [::queue-id id] ::queue.head "new-item"]
-                                  [:db/add [::queue-id id] ::queue.tail "new-item"]]})
-      (let [last-node (dpeek-last this)
+        (get-node db queue-id tail))))
+
+
+
+(defn- dpop [conn queue-id]
+  (let [db (d/db conn)
+        head (dpeek db queue-id)]
+    (cond
+      (queue-empty? head) nil
+      (one-node? head) (d/transact conn {:tx-data [[:db/retractEntity (:db/id head)]]})
+      :else (d/transact conn {:tx-data [[:db/retractEntity (:db/id head)]
+                                        [:db/add [::queue-id queue-id] ::queue.head (-> head :next :db/id)]]}))))
+
+(defn- dpush [conn queue-id data]
+  (let [db (d/db conn)]
+    (if (empty? (dpeek-last db queue-id))
+      (d/transact conn
+        {:tx-data [[:db/add "data-id" ::data.data data]
+                   [:db/add "new-item" ::queue.item ["data-id" [:db/ident ::queue.dummy-item]]]
+                   [:db/add [::queue-id queue-id] ::queue.head "new-item"]
+                   [:db/add [::queue-id queue-id] ::queue.tail "new-item"]]})
+      (let [last-node (dpeek-last db queue-id)
             last-item-id (:db/id last-node)
             last-data-id (-> last-node :data :db/id)]
-        (d/transact conn {:tx-data [[:db/add "data-id" ::data.data data]
-                                    [:db/add "new-item" ::queue.item ["data-id" [:db/ident ::queue.dummy-item]]]
-                                    [:db/add last-item-id ::queue.item [last-data-id "new-item"]]
-                                    [:db/add [::queue-id id] ::queue.tail "new-item"]]}))))
-  (dpeek [this] (let [db (d/db conn)
-                   head (ffirst
-                          (d/q '[:find ?queue-head
-                                 :in $ ?queue-id
-                                 :where
-                                 [?queue ::queue-id ?queue-id]
-                                 [?queue ::queue.head ?queue-head]]
-                            db
-                            id))]
-               (when head
-                 (get-node db this head))))
-
-  (dpop [this]
-    (let [head (dpeek this)]
-      (cond
-        (queue-empty? head) nil
-        (one-node? head) (d/transact conn {:tx-data [[:db/retractEntity (:db/id head)]]})
-        :else (d/transact conn {:tx-data [[:db/retractEntity (:db/id head)]
-                                          [:db/add [::queue-id id] ::queue.head (-> head :next :db/id)]]})))))
+        (d/transact conn
+          {:tx-data [[:db/add "data-id" ::data.data data]
+                     [:db/add "new-item" ::queue.item ["data-id" [:db/ident ::queue.dummy-item]]]
+                     [:db/add last-item-id ::queue.item [last-data-id "new-item"]]
+                     [:db/add [::queue-id queue-id] ::queue.tail "new-item"]]})))))
 
 
-
+;; API
 
 (defn create-dbqueue [conn]
   (let [id (random-uuid)
-        q (->DbQueue conn id)]
+        q {:conn  conn
+           :id    id}]
     (d/transact conn {:tx-data [{::queue-id id}]})
     q))
 
-#_(defn peek
-  ([queue])
-  ([db queue]))
+(defn peek
+  ([queue]
+   (peek (d/db (:conn queue)) queue))
+  ([db queue]
+   (dpeek db (:id queue))))
 
-#_(defn peek-last
-  ([queue])
-  ([db queue]))
+(defn peek-last
+  ([queue]
+   (peek-last (d/db (:conn queue)) queue))
+  ([db queue]
+   (dpeek-last db (:id queue))))
 
-#_(defn pop [queue])
-#_(defn push [queue])
+(defn pop [queue]
+  (dpop (:conn queue) (:id queue)))
 
-;; API
+(defn push [queue data]
+  (dpush (:conn queue) (:id queue) data))
+
 
 (defn foo
   "I don't do a whole lot."
@@ -147,7 +150,7 @@
   (def p (p/open))
   (add-tap #'p/submit)
   (tap> 2)
-  (def test-q (create-dbqueue conn))
+
 
   (def client (d/client {:server-type :dev-local
                         :storage-dir :mem
@@ -156,15 +159,17 @@
   (d/create-database client {:db-name "dm-queue"})
   (def conn (d/connect client {:db-name "dm-queue"}))
   (init-db conn)
+(def test-q (create-dbqueue conn))
 
 
 
-(dpeek-last test-q)
-(dpush test-q "5")
+(peek test-q)
+(push test-q "5")
 (one-node? (dpeek test-q))
 (dpeek-last test-q)
 (dpop test-q)
-(dpeek test-q)
+(peek test-q)
+(peek-last (d/db conn) test-q)
 
 (let [queue (create-dbqueue conn)
           _ (dpush queue "1")]

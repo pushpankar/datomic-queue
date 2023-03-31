@@ -26,45 +26,44 @@
     (binding [*conn* conn]
       (f))))
 
-
 (deftest push-peek-test
   (testing "Peek on empty queue"
     (let [queue (q/create-dbqueue *conn*)]
-      (is (nil? (q/dpeek queue)))))
+      (is (nil? (q/peek queue)))))
   (testing "Peek on non-empty queue"
     (let [queue (q/create-dbqueue *conn*)
-          _ (q/dpush queue "1")]
-      (is-not (nil? (q/dpeek queue))))))
+          _ (q/push queue "1")]
+      (is-not (nil? (q/peek queue))))))
 
 (deftest push-peek-last-test
   (testing "Peek last on empty queue"
     (let [queue (q/create-dbqueue *conn*)]
-      (is (nil? (q/dpeek-last queue)))))
+      (is (nil? (q/peek-last queue)))))
   (testing "Peek last on queue with one node"
     (let [queue (q/create-dbqueue *conn*)
-          _ (q/dpush queue "1")]
-      (is-not (nil? (q/dpeek-last queue))))))
+          _ (q/push queue "1")]
+      (is-not (nil? (q/peek-last queue))))))
 
 (deftest push-pop-test
   (testing "Pop empty queue"
     (let [queue (q/create-dbqueue *conn*)]
-      (is (nil? (q/dpop queue)))))
+      (is (nil? (q/pop queue)))))
   (testing "Pop non-empty queue"
     (let [queue (q/create-dbqueue *conn*)
-          _ (q/dpush queue "1")]
-      (is-not (nil? (q/dpeek queue)))
-      (is-not (nil? (q/dpop queue)))
-      (is (nil? (q/dpeek queue)))))
+          _ (q/push queue "1")]
+      (is-not (nil? (q/peek queue)))
+      (is-not (nil? (q/pop queue)))
+      (is (nil? (q/peek queue)))))
   (testing "Drain and fill the queue"
     (let [queue (q/create-dbqueue *conn*)
-          _ (q/dpush queue "1")
-          _ (q/dpush queue "2")
-          _ (q/dpush queue "3")]
-      (while (not (nil? (q/dpeek queue)))
-        (q/dpop queue))
-      (is (nil? (q/dpeek queue)))
-      (q/dpush queue "1")
-      (is-not (nil? (q/dpeek queue))))))
+          _ (q/push queue "1")
+          _ (q/push queue "2")
+          _ (q/push queue "3")]
+      (while (not (nil? (q/peek queue)))
+        (q/pop queue))
+      (is (nil? (q/peek queue)))
+      (q/push queue "1")
+      (is-not (nil? (q/peek queue))))))
 
 (use-fixtures :once setup)
 (run-all-tests)

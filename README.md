@@ -1,10 +1,29 @@
 # datomic-queue
 
-A Clojure library designed to ... well, that part is up to you.
+Queue data structure on top of datomic
 
 ## Usage
 
-FIXME
+``` clojure
+
+  (def client (d/client {:server-type :dev-local
+                        :storage-dir :mem
+                        :system "ci"}))
+
+  (d/create-database client {:db-name "dm-queue"})
+  (def conn (d/connect client {:db-name "dm-queue"}))
+  (init-db conn)
+
+  (def test-q (create-dbqueue conn))
+
+  (push test-q "5") 
+  (peek test-q)
+
+  (peek-last test-q) 
+  (peek-last (d/db conn) test-q)
+
+  (pop test-q) 
+```
 
 ## License
 
